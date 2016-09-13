@@ -1,0 +1,232 @@
+heat_template_version: 2014-10-16
+
+description: >
+  Fleet instances for Kubernetes nodes
+
+resources:
+
+  kubemaster_network:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: True
+      shared: False
+
+  kubemaster_subnet:
+    type: OS::Neutron::Subnet
+    depends_on: [ kubemaster_network ]
+    properties:
+      cidr: {get_param: kubemaster_subnet_cidr}
+      network: {get_resource: kubemaster_network}
+      allocation_pools: [{"start" : {get_param: kubemaster_subnet_start}, "end" : {get_param: kubemaster_subnet_end}}]
+      dns_nameservers: {get_param: dns_nameservers}
+      enable_dhcp: True
+      gateway_ip: {get_param: kubemaster_gateway_ip}
+      ip_version: 4
+      host_routes:
+        - destination: "0.0.0.0/0"
+          nexthop: {get_param: kubemaster_gateway_ip}
+
+  kubemaster_interface:
+    type: OS::Neutron::RouterInterface
+    depends_on: [ kubemaster_subnet ]
+    properties:
+      router_id: { get_param: router }
+      subnet_id: { get_resource: kubemaster_subnet }
+
+  securitygroup:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      rules:
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 22
+          port_range_max: 22
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 2379
+          port_range_max: 2380
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 80
+          port_range_max: 80
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 443
+          port_range_max: 443
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: udp
+          port_range_min: 8472
+          port_range_max: 8472
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 10250
+          port_range_max: 10250
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 8080
+          port_range_max: 8080
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 5000
+          port_range_max: 5000
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 179
+          port_range_max: 179
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 4321
+          port_range_max: 4321
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 40000
+          port_range_max: 40000
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: icmp
+          direction: ingress
+
+  kubemaster_anti:
+    type: OS::Nova::ServerGroup
+    properties:
+      name: "kubemaster"
+      policies: ["anti-affinity"] # Beware about the number of compute nodes
+
+  kubemaster_group:
+    depends_on: [ kubemaster_interface, securitygroup, kubemaster_anti ]
+    type: OS::Heat::AutoScalingGroup
+    properties:
+      min_size: 0
+      desired_capacity: { get_param: size }
+      max_size: 20
+      resource:
+        type: "KubeNodeInstance"
+        properties:
+          floatingip_network_name: { get_param: floatingip_network_name }
+          anti_affinity: { get_resource: kubemaster_anti }
+          key_name: { get_param: key_name }
+          security_group: { get_resource: securitygroup }
+          network: { get_resource: kubemaster_network }
+          subnet: { get_resource: kubemaster_subnet }
+          instance_basename: "kube-node"
+          flavor: { get_param: flavor }
+          image: { get_param: image }
+          etcd_initial_cluster: { get_param: etcd_initial_cluster }
+          fleet_state: "node"
+
+  scale_up:
+    depends_on: [ kubemaster_group ]
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: {get_resource: kubemaster_group}
+      cooldown: 60
+      scaling_adjustment: 1
+
+  scale_down:
+    depends_on: [ kubemaster_group ]
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: {get_resource: kubemaster_group}
+      cooldown: 60
+      scaling_adjustment: -1
+
+parameters:
+  key_name:
+    type: string
+    label: Name of keypair to assign to servers
+    description: key_name=foo
+    constraints:
+      - custom_constraint: nova.keypair
+
+  kubemaster_subnet_cidr:
+    type: string
+    default: "192.168.5.0/24"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}/[0-9]{1,2}"
+        description: Must be a CIDR like 192.168.1.0/24
+
+  kubemaster_subnet_start:
+    type: string
+    default: "192.168.5.100"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  kubemaster_subnet_end:
+    type: string
+    default: "192.168.5.200"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  kubemaster_gateway_ip:
+    type: string
+    default: "192.168.5.254"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  kubemaster_gateway_ip:
+    type: string
+    default: "192.168.5.254"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  dns_nameservers:
+    type: comma_delimited_list
+    label: DNS nameservers
+    description: dns_nameservers=8.8.8.8,8.8.4.4
+
+  flavor:
+    type: string
+    label: The flavor for Instances
+    description: flavor=m1.medium
+    constraints:
+      - custom_constraint: nova.flavor
+
+  image:
+    type: string
+    label: The debian image based for Instances
+    description: image=debian-8-2016-01-01
+    constraints:
+      - custom_constraint: glance.image
+
+  router:
+    type: string
+    description: Router id where connect interface to subnet
+
+  etcd_initial_cluster:
+    type: string
+    description: "static0=http://192.168.1.10:2380,static1=http://192.168.1.11:2380,static2=http://192.168.1.12:2380"
+
+  size:
+    type: number
+    default: 2
+
+  floatingip_network_name:
+    type: string
+    label: The Floating IP network for NAT
+    description: floatingip_network_name=public
+
+
+outputs:
+  scale_up:
+    value:
+      - {get_attr: [scale_up, alarm_url]}
+
+  scale_down:
+    value:
+      - {get_attr: [scale_down, alarm_url]}

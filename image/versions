@@ -1,0 +1,19 @@
+export ETCD_VERSION=etcd-v3.0.8-linux-amd64.tar.gz
+export FLEET_VERSION=fleet-v0.11.7-linux-amd64.tar.gz
+export CONFD_VERSION=confd-0.11.0-linux-amd64
+export RKT_VERSION=rkt-v1.9.1.tar.gz    # 1.9.1 is needed by k8s
+export FLANNEL_VERSION=flannel.tar.gz   # quay.io/coreos/flannel:0.5.5
+
+export TORUS_VERSION=torus_v0.1.1_linux_386.tar.gz
+
+export CALICO_VERSION=calico_v1.4.0-rc3.tar.gz
+
+export DOCKER_VERSION=docker-1.11.2.tgz
+
+# Un-versioned by K8s Github releases
+export KUBERNETES_VERSION=kubernetes-server-linux-amd64-v1.3.7.tar.gz
+
+export CNI_VERSION=cni-v0.3.0.tar.gz
+
+# Un-versioned by Github releases
+export NETENV_VERSION=setup-network-environment

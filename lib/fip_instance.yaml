@@ -1,0 +1,76 @@
+heat_template_version: 2014-10-16
+
+description: >
+  Instance with UserData and FloatingIP
+
+resources:
+  random:
+    type: OS::Heat::RandomString
+    properties:
+      length: 10
+      sequence: lettersdigits
+
+  port:
+    depends_on: [ random ]
+    type: OS::Neutron::Port
+    properties:
+      name:
+        str_replace:
+          template: bn%-rand%
+          params:
+            "bn%": { get_param: instance_basename }
+            "rand%": { get_attr: [random, value] }
+      network_id: { get_param: network }
+      fixed_ips: [{ "subnet_id": { get_param: subnet } }]
+      security_groups: [ { get_param: security_group } ]
+
+  instance:
+    depends_on: [ port ]
+    type: OS::Nova::Server
+    properties:
+      name:
+        str_replace:
+          template: bn%-rand%
+          params:
+            "bn%": { get_param: instance_basename }
+            "rand%": { get_attr: [random, value] }
+      key_name: { get_param: key_name }
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      networks:
+        - port: { get_resource: port }
+      user_data_format: RAW
+      user_data: { get_param: userdata }
+
+  floating:
+    type: OS::Neutron::FloatingIP
+    depends_on: [ port ]
+    properties:
+      floating_network: { get_param: floatingip_network_name }
+      port_id: { get_resource: port }
+
+
+parameters:
+  key_name:
+    type: string
+    description: Name of keypair to assign to servers
+  security_group:
+    type: string
+  network:
+    type: string
+  subnet:
+    type: string
+  userdata:
+    type: string
+  image:
+    type: string
+  flavor:
+    type: string
+  floatingip_network_name:
+    type: string
+  instance_basename:
+    type: string
+
+outputs:
+  ip:
+    value: { get_attr: [ port, fixed_ips ] }

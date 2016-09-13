@@ -1,0 +1,91 @@
+heat_template_version: 2014-10-16
+
+description: >
+  Fleet cluster over etcd static cluster, with Flannel, Kafka + ELK access over Traefik RP
+
+parameters:
+
+  image:
+    type: string
+    label: The debian image based for Instances
+    description: image=debian-8-2016-01-01
+    constraints:
+      - custom_constraint: glance.image
+
+  floatingip_network_name:
+    type: string
+    label: The Floating IP network for NAT
+    description: floatingip_network_name=public
+
+  key_name:
+    type: string
+    label: Name of keypair to assign to servers
+    description: key_name=foo
+    constraints:
+      - custom_constraint: nova.keypair
+
+  flavor_static:
+    type: string
+    label: The flavor for Instances
+    description: flavor=m1.medium
+    constraints:
+      - custom_constraint: nova.flavor
+
+  flavor_stateless:
+    type: string
+    label: The flavor for Instances
+    description: flavor=m1.medium
+    constraints:
+      - custom_constraint: nova.flavor
+
+  flavor_statefull:
+    type: string
+    label: The flavor for Instances
+    description: flavor=m1.medium
+    constraints:
+      - custom_constraint: nova.flavor
+
+  dns_nameservers:
+    type: comma_delimited_list
+    label: DNS nameservers
+    description: dns_nameservers=8.8.8.8,8.8.4.4
+
+resources:
+  router:
+    type: OS::Neutron::Router
+    properties:
+      admin_state_up: True
+      external_gateway_info: {"network": {get_param: floatingip_network_name}}
+
+  etcd_static:
+    depends_on: [ router ]
+    type: "EtcdStatic"
+    properties:
+      router: { get_resource: router }
+      key_name: {get_param: key_name}
+      flavor: {get_param: flavor_static}
+      image: {get_param: image}
+      dns_nameservers: {get_param: dns_nameservers}
+
+  worker_statefull:
+    depends_on: [ etcd_static ]
+    type: "FleetStatefull"
+    properties:
+      router: { get_resource: router }
+      key_name: {get_param: key_name}
+      flavor: {get_param: flavor_statefull}
+      image: {get_param: image}
+      dns_nameservers: {get_param: dns_nameservers}
+      etcd_initial_cluster: {get_attr: [etcd_static, etcd_initial_cluster]}
+
+  worker_stateless:
+    depends_on: [ worker_statefull ]
+    type: "FleetStateless"
+    properties:
+      router: { get_resource: router }
+      floatingip_network_name: {get_param: floatingip_network_name}
+      key_name: {get_param: key_name}
+      flavor: {get_param: flavor_stateless}
+      image: {get_param: image}
+      dns_nameservers: {get_param: dns_nameservers}
+      etcd_initial_cluster: {get_attr: [etcd_static, etcd_initial_cluster]}

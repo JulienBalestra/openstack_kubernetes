@@ -1,0 +1,18 @@
+resource_registry:
+  "lib::FIPInstance": lib/fip_instance.yaml
+
+  "GenEtcdConf": etcd/gen_etcd_conf.yaml
+  "EtcdStatic": etcd/etcd_static.yaml
+  "EtcdStaticInstance": etcd/etcd_static_instance.yaml
+
+  "FleetStatefull": fleet/fleet_statefull.yaml
+  "FleetStateless": fleet/fleet_stateless.yaml
+
+  "StatefullInstance": fleet/statefull_instance.yaml
+  "StatelessInstance": fleet/stateless_instance.yaml
+
+  "FleetKubeMaster": kubernetes/fleet_kubemaster.yaml
+  "FleetKubeNode": kubernetes/fleet_kubenode.yaml
+
+  "KubeMasterInstance": kubernetes/kube-master.yaml
+  "KubeNodeInstance": kubernetes/kube-node.yaml

@@ -1,0 +1,50 @@
+heat_template_version: 2014-10-16
+
+description: >
+  Generate one configuration for etcd static cluster
+
+resources:
+  useless:
+    type: OS::Heat::RandomString
+    properties:
+      length: 1
+      sequence: lettersdigits
+
+outputs:
+  peers:
+    value:
+      str_replace:
+        template: __name____index__=http://__prefix____index__:__port__
+        params:
+          __name__: {get_param: name}
+          __index__: {get_param: index}
+          __prefix__: {get_param: prefix}
+          __port__: 2380
+
+  clients:
+    value:
+      str_replace:
+        template: http://__prefix____index__:__port__
+        params:
+          __name__: {get_param: name}
+          __index__: {get_param: index}
+          __prefix__: {get_param: prefix}
+          __port__: 2379
+
+  ips:
+    value:
+      str_replace:
+        template: __prefix____index__
+        params:
+          __index__: {get_param: index}
+          __prefix__: {get_param: prefix}
+
+parameters:
+  prefix:
+    type: string
+
+  index:
+    type: string
+
+  name:
+    type: string

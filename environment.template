@@ -1,0 +1,25 @@
+export OS_AUTH_URL= # FILL-IT
+export OS_TENANT_ID= # FILL-IT
+export OS_TENANT_NAME= # FILL-IT
+export OS_USERNAME= # FILL-IT
+export OS_PASSWORD= # FILL-IT
+export OS_REGION_NAME="regionOne"
+
+export PYTHONWARNINGS="ignore:Unverified HTTPS request"
+
+export KEY_NAME=ubuntu
+export FLAVOR_INSTANCE=m1.small
+export PUB_KEY= # FILL-IT
+export DNS_NS= # FILL-IT
+export BUCKET= # FILL-IT
+export PROXY= # FILL-IT
+export NTP= # FILL-IT
+export NTPFALL= # FILL-IT
+export PHONE_HOME= # FILL-IT
+
+export CC=/usr/local/bin/go
+export GOROOT=/usr/local/src/go
+
+alias os="openstack --insecure "
+alias nova="nova --insecure "
+alias heat="heat --insecure "

@@ -1,0 +1,241 @@
+heat_template_version: 2014-10-16
+
+description: >
+  Etcd static cluster
+
+resources:
+  static_token:
+    type: OS::Heat::RandomString
+    properties:
+      length: 10
+      sequence: lettersdigits
+
+  static_network:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: True
+      shared: False
+
+  static_subnet:
+    type: OS::Neutron::Subnet
+    depends_on: [ static_network ]
+    properties:
+      cidr: {get_param: static_subnet_cidr}
+      network: {get_resource: static_network}
+      allocation_pools: [{"start" : {get_param: static_subnet_start}, "end" : {get_param: static_subnet_end}}]
+      dns_nameservers: {get_param: dns_nameservers}
+      enable_dhcp: True
+      gateway_ip: {get_param: static_gateway_ip}
+      ip_version: 4
+      host_routes:
+        - destination: "0.0.0.0/0"
+          nexthop: {get_param: static_gateway_ip}
+
+  static_interface:
+    type: OS::Neutron::RouterInterface
+    depends_on: [ static_subnet ]
+    properties:
+      router_id: { get_param: router }
+      subnet_id: { get_resource: static_subnet }
+
+  etcd_securitygroup:
+      type: OS::Neutron::SecurityGroup
+      properties:
+        rules:
+          - remote_ip_prefix: 0.0.0.0/0
+            protocol: tcp
+            port_range_min: 22
+            port_range_max: 22
+            direction: ingress
+          - remote_ip_prefix: 0.0.0.0/0
+            protocol: tcp
+            port_range_min: 2379
+            port_range_max: 2380
+            direction: ingress
+          - remote_ip_prefix: 0.0.0.0/0
+            protocol: tcp
+            port_range_min: 5000
+            port_range_max: 5000
+            direction: ingress
+          - remote_ip_prefix: 0.0.0.0/0
+            protocol: tcp
+            port_range_min: 179
+            port_range_max: 179
+            direction: ingress
+          - remote_ip_prefix: 0.0.0.0/0
+            protocol: udp
+            port_range_min: 8472
+            port_range_max: 8472
+            direction: ingress
+          - remote_ip_prefix: 0.0.0.0/0
+            protocol: icmp
+            direction: ingress
+
+  etcd_static_anti:
+    type: OS::Nova::ServerGroup
+    properties:
+      name: "etcd_static"
+      policies: ["anti-affinity"] # Beware about the number of compute nodes
+
+  etcd_static_conf:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: { get_param: size }
+      resource_def:
+        type: "GenEtcdConf"
+        properties:
+          name: {get_param: name}
+          index: "%index%"
+          prefix: {get_param: static_prefix}
+
+  etcd_static_group:
+    depends_on: [ etcd_static_conf, static_interface, etcd_securitygroup, static_token, etcd_static_anti ]
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: { get_param: size }
+      resource_def:
+        type: "EtcdStaticInstance"
+        properties:
+          anti_affinity: { get_resource: etcd_static_anti }
+          key_name: { get_param: key_name }
+          security_group: { get_resource: etcd_securitygroup }
+          network: { get_resource: static_network }
+          subnet: { get_resource: static_subnet }
+          flavor: { get_param: flavor }
+          image: { get_param: image }
+          index: "%index%"
+          name: {get_param: name}
+          prefix: {get_param: static_prefix}
+          etcd_initial_cluster_token: { get_attr: [static_token, value] }
+
+          etcd_initial_cluster_ip:
+            list_join: [ ",", { get_attr: [etcd_static_conf, clients] } ]
+
+          etcd_initial_cluster:
+            list_join: [ ",", { get_attr: [etcd_static_conf, peers] } ]
+
+outputs:
+  anti_affinity:
+    value: { get_resource: etcd_static_anti }
+
+  key_name:
+    value: { get_param: key_name }
+
+  security_group:
+    value: { get_resource: etcd_securitygroup }
+
+  network:
+    value: { get_resource: static_network }
+
+  subnet:
+    value: { get_resource: static_subnet }
+
+  flavor:
+    value: { get_param: flavor }
+
+  image:
+    value: { get_param: image }
+
+  name:
+    value: {get_param: name}
+
+  prefix:
+    value: {get_param: static_prefix}
+
+  etcd_initial_cluster_token:
+    value: { get_attr: [static_token, value] }
+
+  etcd_initial_cluster_ip:
+    value:
+      list_join: [ ",", { get_attr: [etcd_static_conf, clients] } ]
+
+  etcd_initial_cluster:
+    value:
+      list_join: [ ",", { get_attr: [etcd_static_conf, peers] } ]
+
+
+parameters:
+  key_name:
+    type: string
+    label: Name of keypair to assign to servers
+    description: key_name=foo
+    constraints:
+      - custom_constraint: nova.keypair
+
+  static_subnet_cidr:
+    type: string
+    default: "192.168.1.0/24"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}/[0-9]{1,2}"
+        description: Must be a CIDR like 192.168.1.0/24
+
+  static_subnet_start:
+    type: string
+    default: "192.168.1.100"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  static_subnet_end:
+    type: string
+    default: "192.168.1.200"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  static_gateway_ip:
+    type: string
+    default: "192.168.1.254"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  static_gateway_ip:
+    type: string
+    default: "192.168.1.254"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  dns_nameservers:
+    type: comma_delimited_list
+    label: DNS nameservers
+    description: dns_nameservers=8.8.8.8,8.8.4.4
+
+  flavor:
+    type: string
+    label: The flavor for Instances
+    description: flavor=m1.medium
+    constraints:
+      - custom_constraint: nova.flavor
+
+  image:
+    type: string
+    label: The debian image based for Instances
+    description: image=debian-8-2016-01-01
+    constraints:
+      - custom_constraint: glance.image
+
+  static_prefix:
+    type: string
+    default: "192.168.1.1" # [ "%s%d" for k in range(3) ]
+    description: Ugly way to stay DRY
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,2}"
+        description: Must be a custom IP address (192.168.1.1 || 192.168.1.10) && ! 192.168.1.100
+
+  router:
+    type: string
+    description: Router id where connect interface to subnet
+
+  name:
+    type: string
+    description: Instance base name for Etcd cluster
+    default: "static"
+
+  size:
+    type: number
+    default: 3
+    constraints:
+      - range: { min: 3 }
+      - range: { max: 9 }

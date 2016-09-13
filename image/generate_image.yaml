@@ -1,0 +1,1002 @@
+heat_template_version: 2014-10-16
+
+description: >
+  All in one to prepare image for Fleet and Kubernetes main stacks
+
+resources:
+  random:
+    type: OS::Heat::RandomString
+    properties:
+      length: 4
+      sequence: lettersdigits
+
+  network:
+    depends_on: [ random ]
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: True
+      name:
+        str_replace:
+          template: ctx%ress%-rand%
+          params:
+            "ctx%": {get_param: context}
+            "ress%": "net"
+            "rand%": { get_attr: [random, value] }
+      shared: False
+
+  subnet:
+    type: OS::Neutron::Subnet
+    depends_on: [ network ]
+    properties:
+      name:
+        str_replace:
+          template: ctx%ress%-rand%
+          params:
+            "ctx%": {get_param: context}
+            "ress%": "subnet"
+            "rand%": { get_attr: [random, value] }
+      cidr: {get_param: subnet_cidr}
+      network: {get_resource: network}
+      allocation_pools: [{"start" : {get_param: subnet_start}, "end" : {get_param: subnet_end}}]
+      dns_nameservers: {get_param: dns_nameservers}
+      enable_dhcp: True
+      gateway_ip: {get_param: gateway_ip}
+      ip_version: 4
+
+  router:
+    type: OS::Neutron::Router
+    depends_on: [ subnet ]
+    properties:
+      admin_state_up: True
+      external_gateway_info: {"network": {get_param: floatingip_network_name}}
+
+  interface:
+    type: OS::Neutron::RouterInterface
+    depends_on: [ router ]
+    properties:
+      router_id: { get_resource: router }
+      subnet_id: { get_resource: subnet }
+
+  generate_securitygroup:
+      depends_on: [ random ]
+      type: OS::Neutron::SecurityGroup
+      properties:
+        name:
+          str_replace:
+            template: ctx%ress%-rand%
+            params:
+              "ctx%": {get_param: context}
+              "ress%": "generate"
+              "rand%": { get_attr: [random, value] }
+        rules:
+          - remote_ip_prefix: {get_param: where_are_you}
+            protocol: tcp
+            port_range_min: 1
+            port_range_max: 65535
+            direction: ingress
+          - remote_ip_prefix: {get_param: where_are_you}
+            protocol: udp
+            port_range_min: 1
+            port_range_max: 65535
+            direction: ingress
+          - remote_ip_prefix: {get_param: where_are_you}
+            protocol: icmp
+            direction: ingress
+
+  port:
+    depends_on: [ random ]
+    type: OS::Neutron::Port
+    properties:
+      name:
+        str_replace:
+          template: bn%-rand%
+          params:
+            "bn%": "generate"
+            "rand%": { get_attr: [random, value] }
+      network_id: { get_resource: network }
+      fixed_ips: [{ "subnet_id": { get_resource: subnet } }]
+      security_groups: [ { get_resource: generate_securitygroup } ]
+
+  floating:
+    type: OS::Neutron::FloatingIP
+    depends_on: [ port ]
+    properties:
+      floating_network: { get_param: floatingip_network_name }
+      port_id: { get_resource: port }
+
+  instance:
+    depends_on: [ generate_securitygroup, interface, port, generate_userdata ]
+    type: OS::Nova::Server
+    properties:
+      name:
+        str_replace:
+          template: ctx%rand%-ress%
+          params:
+            "ctx%": {get_param: context}
+            "ress%": "generate"
+            "rand%": { get_attr: [random, value] }
+      key_name: { get_param: key_name }
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      networks:
+        - port: { get_resource: port }
+      user_data_format: RAW
+      user_data: { get_resource: generate_userdata }
+
+  generate_userdata:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+        preserve_hostname: false
+        manage_etc_hosts: true
+        package_update: true
+        package_upgrade: false
+        packages:
+         - curl
+         - jq
+         - dnsutils
+         - systemd-container
+
+        users:
+          - name: cloud
+            groups: sudo
+            sudo: ['ALL=(ALL) NOPASSWD:ALL']
+            shell: /bin/bash
+            ssh_authorized_keys: { get_param: ssh_authorized_keys }
+
+        write_files:
+          - path: /etc/etcd-environment
+            permissions: 0644
+
+          - path: /etc/fleet-environment
+            permissions: 0644
+
+          - path: /etc/network-environment
+            permissions: 0644
+
+          - path: /opt/bin/setup-etcd-environment
+            permissions: 0755
+            content: |
+              #!/usr/bin/env bash
+
+              set -e ; set -o pipefail
+
+              DEFAULT_IPV4=$(curl 169.254.169.254/1.0/meta-data/local-ipv4)
+
+              cat << EOF | tee /etc/etcd-environment
+              # ETCD_FLAG=value
+              EOF
+
+          - path: /opt/bin/setup-fleet-environment
+            permissions: 0755
+            content: |
+              #!/usr/bin/env bash
+
+              set -e ; set -o pipefail
+
+              cat << EOF | tee /etc/fleet-environment
+              # FLEET_METADATA="key=value"
+              EOF
+
+          - path: /opt/bin/setup-torus-environment
+            permissions: 0755
+            content: |
+              #!/usr/bin/env bash
+
+              set -e ; set -o pipefail
+
+              MEMBERS=$(curl -f 127.0.0.1:2379/v2/members)
+
+              cat << EOF | tee /etc/torus-environment
+              ETCD_MEMBERS=$(echo -n $MEMBERS | jq -r '[.members[] | .clientURLs[0]] | join(",")')
+              ETCD_MEMBER_ZERO=$(echo -n $MEMBERS | jq -r ".members[0] | .clientURLs[0]")
+              TORUS_PEER_ADDRESS="http://${DEFAULT_IPV4}:40000"
+              EOF
+
+          - path: /etc/systemd/system/setup-etcd-environment.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Setup etcd environment
+
+              After=network.target
+
+              Requires=setup-network-environment.service
+              After=setup-network-environment.service
+
+              [Service]
+              SyslogIdentifier=%p
+              ExecStart=/opt/bin/setup-etcd-environment
+              RemainAfterExit=yes
+              Type=oneshot
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/setup-fleet-environment.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Setup fleet environment
+
+              After=network.target
+
+              [Service]
+              SyslogIdentifier=%p
+              ExecStart=/opt/bin/setup-fleet-environment
+              RemainAfterExit=yes
+              Type=oneshot
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/etcd.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=etcd
+              Conflicts=etcd.service
+
+              Requires=setup-etcd-environment.service
+              After=setup-etcd-environment.service
+
+              [Service]
+              SyslogIdentifier=%p
+              Environment=ETCD_DATA_DIR=/var/lib/etcd
+              Environment=ETCD_NAME=%m
+              EnvironmentFile=/etc/etcd-environment
+              ExecStart=/usr/bin/etcd
+              Type=notify
+              Restart=always
+              RestartSec=10s
+              LimitNOFILE=40000
+              TimeoutStartSec=0
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/fleet.socket
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Fleet API Socket
+
+              PartOf=fleet.service
+
+              [Socket]
+              ListenStream=/var/run/fleet.sock
+              SocketMode=0660
+              SocketUser=root
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/fleet.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Fleet daemon
+
+              After=etcd.service
+              After=flanneld.service
+
+              Requires=setup-fleet-environment.service setup-network-environment
+              After=setup-fleet-environment.service setup-network-environment
+
+              Wants=fleet.socket
+              After=fleet.socket
+
+              [Service]
+              SyslogIdentifier=%p
+              Environment=GOMAXPROCS=1
+              EnvironmentFile=/etc/fleet-environment
+              EnvironmentFile=/run/flannel/subnet.env
+              ExecStartPre=/usr/bin/test $FLANNEL_SUBNET
+              ExecStart=/usr/bin/fleetd
+              Restart=always
+              RestartSec=15s
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/inventory.service
+            permissions: 0644
+            content: |
+              [Unit]
+              After=etcd.service
+              Requires=etcd.service
+
+              [Service]
+              SyslogIdentifier=%p
+              EnvironmentFile=/etc/bucket_urls
+              Environment=BIN=/usr/bin/inventory
+              ExecStartPre=/usr/bin/curl -Lfk ${BUCKET_URL}/inventory/inventory -o $BIN
+              ExecStartPre=/bin/chmod 755 $BIN
+              ExecStart=/usr/bin/inventory
+              Restart=always
+              RestartSec=15s
+
+              [X-Fleet]
+              Global=true
+
+          - path: /etc/systemd/system/flanneld.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Flannel
+
+              Requires=etcd.service
+              After=etcd.service
+
+              [Service]
+              SyslogIdentifier=%p
+              ExecStartPre=/usr/bin/etcdctl set /coreos.com/network/config \
+                '{"Network":"10.1.0.0/16", "Backend": {"Type": "vxlan"}}'
+              ExecStartPre=/sbin/modprobe tun
+              ExecStartPre=/sbin/modprobe ip_tables
+              ExecStartPre=/bin/ls -ls /dev/net/tun
+              ExecStartPre=/bin/mkdir -p /run/flannel
+              ExecStart=/usr/bin/docker run --privileged=true --rm --net=host \
+                -v /dev/net/tun:/dev/net/tun:ro -v /run/flannel:/run/flannel \
+                quay.io/coreos/flannel:0.5.5 /opt/bin/flanneld --ip-masq=true
+              Restart=always
+              RestartSec=5s
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/fleet-skydns.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Fleeter for SkyDNS
+
+              Requires=fleet.service
+              After=fleet.service
+
+              [Service]
+              SyslogIdentifier=%p
+              WorkingDirectory=/etc/systemd/system/
+              ExecStartPre=/usr/bin/fleetctl list-machines
+              ExecStartPre=/usr/bin/fleetctl list-units
+              ExecStart=/usr/bin/fleetctl start skydns.service
+              Restart=on-failure
+              RestartSec=10s
+
+          - path: /etc/systemd/system/skydns.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=SkyDNS
+
+              Requires=etcd.service setup-network-environment.service
+              After=etcd.service setup-network-environment.service
+
+              [Service]
+              SyslogIdentifier=%p
+              EnvironmentFile=/etc/bucket_urls
+              Environment=SKYDNS_ADDR=0.0.0.0:53
+              ExecStartPre=/usr/bin/rkt --insecure-options=all fetch ${ACI_URL}/%p.aci
+              ExecStartPre=/usr/bin/etcdctl set /skydns/config \
+                '{"domain": "skydns.local"}'
+              ExecStart=/usr/bin/rkt run \
+                --net=host \
+                --set-env=SKYDNS_ADDR=${SKYDNS_ADDR} \
+                skynetservices/skydns
+              Restart=always
+              RestartSec=20s
+
+              [X-Fleet]
+              Global=true
+
+          - path: /etc/systemd/system/setup-torus-environment.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Torus
+
+              Requires=etcd.service setup-network-environment.service
+              After=etcd.service setup-network-environment.service
+
+              [Service]
+              SyslogIdentifier=%p
+              EnvironmentFile=/etc/network-environment
+              ExecStart=/opt/bin/setup-torus-environment
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/torusd.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Torus
+
+              Requires=etcd.service setup-torus-environment.service
+              After=etcd.service setup-torus-environment.service
+
+              [Service]
+              SyslogIdentifier=%p
+
+              EnvironmentFile=/etc/torus-environment
+
+              Environment=STORAGE_SIZE=5GiB
+              Environment=DATA_DIR=/var/lib/torus
+
+              ExecStartPre=/usr/bin/du -sh $DATA_DIR
+              ExecStartPre=/bin/ls $DATA_DIR
+
+              ExecStartPre=-/usr/bin/torusctl -C $ETCD_MEMBER_ZERO init
+
+              ExecStart=/usr/bin/torusd \
+                --data-dir $DATA_DIR \
+                --peer-address http://0.0.0.0:40000 \
+                --size $STORAGE_SIZE
+
+              Restart=always
+              RestartSec=60s
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/setup-network-environment.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Setting up network environment file
+
+              [Service]
+              SyslogIdentifier=%p
+              Type=oneshot
+              Environment=FILE=/etc/network-environment
+              ExecStartPre=/bin/cat $FILE
+              ExecStart=/opt/bin/setup-network-environment -o $FILE
+              ExecStartPost=/bin/cat $FILE
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/setup-network-environment.timer
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Periodic Setting up network environment file
+
+              [Timer]
+              OnActiveSec=0s
+              OnUnitActiveSec=1h
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /lib/systemd/system/docker.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Docker Application Container Engine
+              Documentation=https://docs.docker.com
+              After=network.target docker.socket
+              Requires=docker.socket
+
+              [Service]
+              Type=notify
+              ExecStart=/usr/bin/docker daemon
+              ExecReload=/bin/kill -s HUP $MAINPID
+              LimitNOFILE=1048576
+              LimitNPROC=1048576
+              LimitCORE=infinity
+              TimeoutStartSec=0
+              # kill only the docker process, not all processes in the cgroup
+              KillMode=process
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/calico-node.service
+            permissions: 0644
+            content: |
+              [Unit]
+              After=etcd.service
+              Requires=etcd.service
+
+              [Service]
+              EnvironmentFile=/etc/network-environment
+              EnvironmentFile=/etc/bucket_urls
+              ExecStartPre=/bin/mkdir -p /var/run/calico
+              ExecStartPre=/usr/bin/curl -Ifk ${ACI_URL}/%p.aci
+              ExecStartPre=/usr/bin/rkt fetch --insecure-options=all ${ACI_URL}/%p.aci
+              ExecStartPre=/usr/bin/rkt gc --grace-period=0
+              ExecStart=/usr/bin/rkt run \
+                --stage1-from-dir=stage1-fly.aci \
+                --set-env=ETCD_AUTHORITY=127.0.0.1:2379 \
+                --set-env=FELIX_ETCDADDR=127.0.0.1:2379 \
+                --set-env=FELIX_ETCDSCHEME=http \
+                --set-env=IP=${DEFAULT_IPV4} \
+                --volume=birdctl,kind=host,source=/var/run/calico,readOnly=false \
+                --mount volume=birdctl,target=/var/run/calico \
+                quay.io/calico/node:v0.21.0
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /lib/systemd/system/docker.socket
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Docker Socket for the API
+              PartOf=docker.service
+
+              [Socket]
+              ListenStream=/var/run/docker.sock
+              SocketMode=0660
+              SocketUser=root
+
+              [Install]
+              WantedBy=sockets.target
+
+          - path: /etc/rkt/net.d/10-flannel.conf
+            permissions: 0644
+            content: |
+              {
+                  "name": "flannel",
+                  "type": "flannel",
+                  "delegate": {
+                    "isDefaultGateway": true,
+                    "ipMasq": true
+                  }
+              }
+
+          - path: /etc/rkt/net.d/20-calico.conf
+            permissions: 0644
+            content: |
+              {
+                  "name": "calico",
+                  "type": "calico",
+                  "ipam": {
+                    "type": "calico-ipam"
+                  }
+              }
+
+          - path: /etc/update-motd.d/20-usage
+            permissions: 0655
+            content: |
+              #! /bin/sh
+
+              LINE="--------"
+              printf "\n${LINE}\n uptime:\n$(uptime)\n${LINE}\n"
+
+          - path: /etc/bucket_urls
+            permissions: 0644
+            content:
+              str_replace:
+                template: |
+                  BUCKET_URL=__bucket_root_url__
+                  ACI_URL=__bucket_root_url__/aci
+                params:
+                  __bucket_root_url__: { get_param: bucket_root_url }
+
+          - path: /etc/systemd/timesyncd.conf
+            permissions: 0644
+            content:
+              str_replace:
+                template: |
+                  [Time]
+                  NTP=__ntp__
+                  FallbackNTP=__ntpfall__
+                params:
+                  __ntp__: { get_param: ntp }
+                  __ntpfall__: { get_param: ntpfall }
+
+          - path: /opt/bin/rkt-sidekick
+            permissions: 0755
+            content: |
+              #! /usr/bin/env bash
+
+              set -e
+
+              if [ -z $1 ]
+              then
+                echo 'give /tmp/basename_number as $1 == basename/prefix'
+              fi
+
+              if [ -z $2 ]
+              then
+                echo 'give /tmp/basename_number as $2 == number/instance'
+              fi
+
+              source /etc/network-environment
+              # Flannel policy allow a /24 for each host, cutting the last IP field allow to regex over it
+              PREFIX=$(echo $FLANNEL_1_IPV4 | cut -f1,2,3 -d '.')
+              if [ -z $PREFIX ]
+              then
+                echo "No flannel network"
+                PREFIX="[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}"
+              fi
+
+              while true
+              do
+                UUID=$(cat /tmp/$1$2)
+                STATUS=$(rkt status $UUID)
+                IP=$(echo $STATUS | grep -Eo "$PREFIX\.[0-9]{1,3}")
+
+                if [ $(echo -n $IP | wc -w) != 1 ]
+                then
+                  echo '$IP != 1'
+                  continue
+                fi
+
+                etcdctl set --ttl 60 /skydns/local/skydns/$1/${1}${2} "{\"host\": \"${IP}\"}"
+
+                if [ ${TRAEFIK_BACKEND_PORT} ]
+                then
+                  etcdctl set --ttl 60 /traefik/backends/${1}/servers/server${2}/weight '1'
+                  etcdctl set --ttl 60 /traefik/backends/${1}/servers/server${2}/url \
+                    "http://${1}${2}.${1}.skydns.local:${TRAEFIK_BACKEND_PORT}"
+                fi
+
+                sleep 30
+              done
+
+          - path: /tmp/phone_home.sh
+            permissions: 0755
+            content: |
+              #! /usr/bin/env bash
+
+              set -x
+
+              curl --connect-timeout 5 -XPOST $1/deployed -d 'ok'
+              exit 0
+
+          - path: /etc/systemd/system/fleet-jds_kafka.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Fleeter for Journald Stream Kafka
+
+              Requires=fleet.service skydns.service flanneld.service
+              After=fleet.service skydns.service flanneld.service
+
+              [Service]
+              SyslogIdentifier=%p
+              WorkingDirectory=/etc/systemd/system/
+              ExecStartPre=/usr/bin/fleetctl list-machines
+              ExecStartPre=/usr/bin/fleetctl list-units
+              ExecStart=/usr/bin/fleetctl start jds_kafka.service
+              Restart=on-failure
+              RestartSec=10s
+
+          - path: /etc/systemd/system/jds_kafka.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Kafka producer
+
+              Requires=fleet.service skydns.service flanneld.service
+              After=fleet.service skydns.service flanneld.service
+
+              [Service]
+              SyslogIdentifier=%p
+              EnvironmentFile=/etc/bucket_urls
+              EnvironmentFile=/etc/network-environment
+              Environment=DB_FOLDER=/var/lib/jds
+              Environment=SINCE_DB=/var/lib/jds/sincedb
+              Environment=DNS_SEARCH=kafka.skydns.local
+              ExecStartPre=-/usr/bin/rkt gc --grace-period=0s quay.io/julienbalestra/%p
+              ExecStartPre=/usr/bin/etcdctl ls /skydns/local/skydns/kafka
+              ExecStartPre=/usr/bin/curl -Ifk ${ACI_URL}/%p.aci
+              ExecStartPre=-/bin/rm -v /tmp/%p%i
+              ExecStartPre=/bin/mkdir -vp $DB_FOLDER
+              ExecStartPre=-/bin/cat -e $SINCE_DB
+              ExecStartPre=/usr/bin/rkt --insecure-options=all fetch ${ACI_URL}/%p.aci
+              ExecStart=/usr/bin/rkt run --net=host --dns=${DEFAULT_IPV4} --dns-search=${DNS_SEARCH} \
+                --uuid-file-save=/tmp/%p%i \
+                --volume journal,kind=host,source=/run/log/journal \
+                --volume sincedb,kind=host,source=${DB_FOLDER} \
+                --set-env=SINCEDB=${SINCE_DB} \
+                --set-env=DNS_SEARCH=${DNS_SEARCH} \
+                %p \
+                --mount volume=journal,target=/run/log/journal \
+                --mount volume=sincedb,target=${DB_FOLDER}
+
+              ExecStop=-/bin/rm -v /tmp/%p%i
+              Restart=always
+              RestartSec=120s
+              TimeoutStartSec=60min
+
+              [X-Fleet]
+              Global=true
+
+        runcmd:
+          - set -x
+          - set -e
+
+          - mkdir -v /tmp/docker_install
+          - [curl, -L, {get_param: insecure}, {get_param: docker_tar}, -o, /tmp/docker_install/docker.tar.gz]
+          - cd -P /tmp/docker_install
+          - tar -xzvf /tmp/docker_install/docker.tar.gz --strip-components=1
+          - mv -v /tmp/docker_install/docker /usr/bin/docker
+          - mv -v /tmp/docker_install/docker-containerd /usr/bin/docker-containerd
+          - mv -v /tmp/docker_install/docker-containerd-ctr /usr/bin/docker-containerd-ctr
+          - mv -v /tmp/docker_install/docker-containerd-shim /usr/bin/docker-containerd-shim
+          - mv -v /tmp/docker_install/docker-runc /usr/bin/docker-runc
+          - docker --version
+
+          - systemctl daemon-reload
+          - systemctl enable docker.socket
+          - systemctl enable docker.service
+          - systemctl start docker.service
+
+          - mkdir -v /tmp/etcd_install
+          - [curl, -L, {get_param: insecure}, {get_param: etcd_tar}, -o, /tmp/etcd_install/etcd.tar.gz]
+          - [cd, -P, /tmp/etcd_install]
+          - [tar, -xzvf, /tmp/etcd_install/etcd.tar.gz, --strip-components=1]
+          - [mv, /tmp/etcd_install/etcd, /usr/bin/etcd]
+          - [mv, /tmp/etcd_install/etcdctl, /usr/bin/etcdctl]
+          - mkdir -p /var/lib/etcd
+          - etcd --version
+          - etcdctl --version
+
+          - mkdir -v /tmp/fleet_install
+          - [curl, -L, {get_param: insecure}, {get_param: fleet_tar}, -o, /tmp/fleet_install/fleet.tar.gz]
+          - [cd, -P, /tmp/fleet_install]
+          - [tar, -xzvf, /tmp/fleet_install/fleet.tar.gz, --strip-components=1]
+          - [mv, /tmp/fleet_install/fleetd, /usr/bin/fleetd]
+          - mv /tmp/fleet_install/fleetctl /usr/bin/fleetctl
+          - fleetd --version
+          - fleetctl --version
+
+          - mkdir -v /tmp/rkt_install
+          - mkdir -pv /usr/lib/rkt/stage1-images
+
+          - [curl, -L, {get_param: insecure}, {get_param: rkt_tar}, -o, /tmp/rkt_install/rkt.tar.gz]
+          - cd -P /tmp/rkt_install
+          - tar -xzvf /tmp/rkt_install/rkt.tar.gz --strip-components=1
+          - mv -v /tmp/rkt_install/rkt /usr/bin/rkt
+          - mv -v /tmp/rkt_install/init/systemd/rkt-metadata.service /etc/systemd/system/rkt-metadata.service
+          - mv -v /tmp/rkt_install/init/systemd/rkt-metadata.socket /etc/systemd/system/rkt-metadata.socket
+          - mv -v /tmp/rkt_install/init/systemd/rkt-api.service /etc/systemd/system/rkt-api.service
+          - [mv, -v, /tmp/rkt_install/init/systemd/rkt-gc.timer, /etc/systemd/system/rkt-gc.timer]
+          - [mv, -v, /tmp/rkt_install/init/systemd/rkt-gc.service, /etc/systemd/system/rkt-gc.service]
+          - [mv, -v, /tmp/rkt_install/stage1-coreos.aci, /usr/lib/rkt/stage1-images/stage1-coreos.aci]
+          - [mv, -v, /tmp/rkt_install/stage1-fly.aci, /usr/lib/rkt/stage1-images/stage1-fly.aci]
+          - [mv, -v, /tmp/rkt_install/bash_completion/rkt.bash, /usr/share/bash-completion/completions/rkt]
+          - rkt version
+          - groupadd rkt
+
+          - [curl, -L, {get_param: insecure}, {get_param: confd_bin}, -o, /usr/bin/confd]
+          - chmod +x /usr/bin/confd
+          - /usr/bin/confd --version
+
+          - [curl, -L, {get_param: insecure}, {get_param: flannel_tar}, -o, /tmp/flannel.tar.gz]
+          - docker load < /tmp/flannel.tar.gz
+          - docker images
+
+          - systemctl daemon-reload
+          - systemctl enable rkt-metadata.service
+          - systemctl enable rkt-metadata.socket
+          - systemctl enable rkt-api.service
+          - systemctl enable rkt-gc.timer
+
+          - mkdir -pv /opt/bin/
+          - [curl, -L, {get_param: insecure}, {get_param: netenv_bin}, -o, /opt/bin/setup-network-environment]
+          - chmod +x /opt/bin/setup-network-environment
+          - systemctl enable setup-network-environment.timer
+          - systemctl enable setup-network-environment.service
+
+          - mkdir -v /tmp/torus_install
+          - [curl, -L, {get_param: insecure}, {get_param: torus_tar}, -o, /tmp/torus_install/torus.tar.gz]
+          - cd -P /tmp/torus_install
+          - tar -xzvf /tmp/torus_install/torus.tar.gz --strip-components=1
+          - mv -v torusblk /usr/bin/torusblk
+          - mv -v torusctl /usr/bin/torusctl
+          - mv -v torusd /usr/bin/torusd
+          - mkdir -pv /var/lib/torus
+
+          - mkdir -v /opt/cni
+          - [curl, -L, {get_param: insecure}, {get_param: cni_tar}, -o, /opt/cni/cni.tar.gz]
+          - cd -P /opt/cni
+          - tar -xzvf /opt/cni/cni.tar.gz --strip-components=1
+          - ln -s /opt/cni/cnitool /usr/bin/cnitool
+          - mv -v /opt/cni/cni.tar.gz /tmp
+
+          - mkdir -v /tmp/calico_install
+          - mkdir -pv /usr/lib/rkt/plugins/net
+          - cd -P /tmp/calico_install
+          - [curl, -L, {get_param: insecure}, {get_param: calico_tar}, -o, /tmp/calico_install/calico.tar.gz]
+          - tar -xzvf calico.tar.gz
+          - mv -v /tmp/calico_install/calico /opt/cni/calico
+          - mv -v /tmp/calico_install/calico-ipam /opt/cni/calico-ipam
+          - mv -v /tmp/calico_install/calicoctl /usr/bin/calicoctl
+          - ln -s /opt/cni/calico /etc/rkt/net.d/calico
+          - ln -s /opt/cni/calico /usr/lib/rkt/plugins/net/calico
+          - ln -s /opt/cni/calico-ipam /usr/lib/rkt/plugins/net/calico-ipam
+          - ln -s /opt/cni/calico-ipam /etc/rkt/net.d/calico-ipam
+          - chmod -R +x /opt/cni
+          - chmod +x /usr/bin/calicoctl
+
+          - mkdir -p /tmp/kubernetes_install
+          - cd -P /tmp/kubernetes_install
+          - [curl, -L, {get_param: insecure}, {get_param: kubernetes_tar}, -o, /tmp/kubernetes_install/kubernetes.tar.gz]
+          - tar -xzvf /tmp/kubernetes_install/kubernetes.tar.gz --strip-components=1
+          - mv /tmp/kubernetes_install/server/bin/federation-apiserver /usr/bin/federation-apiserver
+          - mv /tmp/kubernetes_install/server/bin/federation-controller-manager /usr/bin/federation-controller-manager
+          - mv /tmp/kubernetes_install/server/bin/hyperkube /usr/bin/hyperkube
+          - mv /tmp/kubernetes_install/server/bin/kube-apiserver /usr/bin/kube-apiserver
+          - mv /tmp/kubernetes_install/server/bin/kube-controller-manager /usr/bin/kube-controller-manager
+          - mv /tmp/kubernetes_install/server/bin/kube-dns /usr/bin/kube-dns
+          - mv /tmp/kubernetes_install/server/bin/kube-proxy /usr/bin/kube-proxy
+          - mv /tmp/kubernetes_install/server/bin/kube-scheduler /usr/bin/kube-scheduler
+          - mv /tmp/kubernetes_install/server/bin/kubectl /usr/bin/kubectl
+          - mv /tmp/kubernetes_install/server/bin/kubelet /usr/bin/kubelet
+          - mv /tmp/kubernetes_install/server/bin/kubemark /usr/bin/kubemark
+
+          - rm -v /etc/machine-id ; rm -v /var/lib/dbus/machine-id
+          - touch /etc/machine-id ; touch /var/lib/dbus/machine-id
+          - journalctl --sync
+          - journalctl --flush
+          - journalctl --rotate
+          - journalctl --vacuum-size 1B
+          - truncate -s 0 /var/log/syslog
+          - truncate -s 0 /var/log/*.log
+          - truncate -s 0 /var/log/**/*.log
+          - echo generate_finished_well
+          - [/tmp/phone_home.sh, {get_param: phone}]
+
+        final_message: "The system is finally up, after $UPTIME seconds. Shutting down for image building"
+        power_state:
+          delay: "+1"
+          timeout: 60
+          mode: poweroff
+          message: Shutdown for snapshot
+          condition: True
+
+        apt_proxy: {get_param: apt_proxy}
+        timezone: {get_param: timezone}
+
+
+parameters:
+  timezone:
+    type: string
+    default: "Europe/Paris"
+
+  ntp:
+    type: string
+    default: "ntp.ubuntu.com"
+
+  ntpfall:
+    type: string
+    default: "ntp.ubuntu.com"
+
+  apt_proxy:
+    type: string
+    default: ""
+
+  context:
+    type: string
+    default: ""
+
+  key_name:
+    type: string
+    label: Name of keypair to assign to servers
+    description: key_name=foo
+    constraints:
+      - custom_constraint: nova.keypair
+
+  subnet_cidr:
+    type: string
+    default: "192.168.1.0/24"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}/[0-9]{1,2}"
+        description: Must be a CIDR like 192.168.1.0/24
+
+  subnet_start:
+    type: string
+    default: "192.168.1.100"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  subnet_end:
+    type: string
+    default: "192.168.1.200"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  gateway_ip:
+    type: string
+    default: "192.168.1.254"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  dns_nameservers:
+    type: comma_delimited_list
+    label: DNS nameservers
+    description: dns_nameservers=8.8.8.8,8.8.4.4
+
+  floatingip_network_name:
+    type: string
+    label: The Floating IP network for NAT
+    description: floatingip_network_name=public
+
+  flavor:
+    type: string
+    label: The flavor for Instances
+    description: flavor=m1.medium
+
+  image:
+    type: string
+    label: The debian image based for Instances
+    description: image=debian-8-2016-01-01
+
+  where_are_you:
+    type: string
+    default: "0.0.0.0/0"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}/[0-9]{1,2}"
+        description: Must be a CIDR like 192.168.1.0/24
+
+  insecure:
+    type: string
+    default: "--insecure"
+    description: Warning with curl command for https
+
+  etcd_tar:
+    type: string
+    description: "https://github.com/coreos/etcd/releases/version/arch.tar.gz"
+
+  fleet_tar:
+    type: string
+    description: "https://github.com/coreos/fleet/releases/version/arch.tar.gz"
+
+  rkt_tar:
+    type: string
+    description: "https://github.com/coreos/rkt/releases/version/arch.tar.gz"
+
+  confd_bin:
+    type: string
+    description: "https://github.com/coreos/fleet/releases/version/arch.tar.gz"
+
+  flannel_tar:
+    type: string
+    description: "quay.io/coreos/flannel container tar.gz"
+
+  torus_tar:
+    type: string
+    description: "https://github.com/coreos/torus/releases"
+
+  cni_tar:
+    type: string
+    description: "https://github.com/containernetworking/cni/releases"
+
+  docker_tar:
+    type: string
+    description: "https://get.docker.com/builds/Linux/x86_64/docker-1.11.0.tgz"
+
+  calico_tar:
+    type: string
+    description: "https://github.com/projectcalico/calico-cni/releases"
+
+  bucket_root_url:
+    type: string
+    description: "https://object-store.api/v1/AUTH_token/"
+
+  netenv_bin:
+    type: string
+    description: "https://object-store.api/v1/AUTH_token/netenv/setup-network-environment"
+
+  kubernetes_tar:
+    type: string
+
+  ssh_authorized_keys:
+    type: comma_delimited_list
+    label: ssh publics keys
+
+  phone:
+    type: string
+
+outputs:
+  instance_id:
+    description: "The instance id to snapshot"
+    value: {get_resource: instance}

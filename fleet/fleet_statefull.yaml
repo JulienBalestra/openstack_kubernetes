@@ -1,0 +1,207 @@
+heat_template_version: 2014-10-16
+
+description: >
+  Fleet instances for statefull workers
+
+resources:
+
+  statefull_network:
+    type: OS::Neutron::Net
+    properties:
+      admin_state_up: True
+      shared: False
+
+  statefull_subnet:
+    type: OS::Neutron::Subnet
+    depends_on: [ statefull_network ]
+    properties:
+      cidr: {get_param: statefull_subnet_cidr}
+      network: {get_resource: statefull_network}
+      allocation_pools: [{"start" : {get_param: statefull_subnet_start}, "end" : {get_param: statefull_subnet_end}}]
+      dns_nameservers: {get_param: dns_nameservers}
+      enable_dhcp: True
+      gateway_ip: {get_param: statefull_gateway_ip}
+      ip_version: 4
+      host_routes:
+        - destination: "0.0.0.0/0"
+          nexthop: {get_param: statefull_gateway_ip}
+
+  statefull_interface:
+    type: OS::Neutron::RouterInterface
+    depends_on: [ statefull_subnet ]
+    properties:
+      router_id: { get_param: router }
+      subnet_id: { get_resource: statefull_subnet }
+
+  securitygroup:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      rules:
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 22
+          port_range_max: 22
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 2379
+          port_range_max: 2380
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 5000
+          port_range_max: 5000
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 179
+          port_range_max: 179
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: udp
+          port_range_min: 8472
+          port_range_max: 8472
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 4321
+          port_range_max: 4321
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 40000
+          port_range_max: 40000
+          direction: ingress
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: icmp
+          direction: ingress
+
+  statefull_anti:
+    type: OS::Nova::ServerGroup
+    properties:
+      name: "statefull"
+      policies: ["anti-affinity"] # Beware about the number of compute nodes
+
+  statefull_group:
+    depends_on: [ statefull_interface, securitygroup, statefull_anti ]
+    type: OS::Heat::AutoScalingGroup
+    properties:
+      min_size: 0
+      desired_capacity: { get_param: size }
+      max_size: 20
+      resource:
+        type: "StatefullInstance"
+        properties:
+          anti_affinity: { get_resource: statefull_anti }
+          key_name: { get_param: key_name }
+          security_group: { get_resource: securitygroup }
+          network: { get_resource: statefull_network }
+          subnet: { get_resource: statefull_subnet }
+          instance_basename: "statefull"
+          flavor: { get_param: flavor }
+          image: { get_param: image }
+          etcd_initial_cluster: { get_param: etcd_initial_cluster }
+          fleet_state: "statefull"
+
+  scale_up:
+    depends_on: [ statefull_group ]
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: {get_resource: statefull_group}
+      cooldown: 60
+      scaling_adjustment: 1
+
+  scale_down:
+    depends_on: [ statefull_group ]
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: {get_resource: statefull_group}
+      cooldown: 60
+      scaling_adjustment: -1
+
+parameters:
+  key_name:
+    type: string
+    label: Name of keypair to assign to servers
+    description: key_name=foo
+    constraints:
+      - custom_constraint: nova.keypair
+
+  statefull_subnet_cidr:
+    type: string
+    default: "192.168.3.0/24"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}/[0-9]{1,2}"
+        description: Must be a CIDR like 192.168.1.0/24
+
+  statefull_subnet_start:
+    type: string
+    default: "192.168.3.100"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  statefull_subnet_end:
+    type: string
+    default: "192.168.3.200"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  statefull_gateway_ip:
+    type: string
+    default: "192.168.3.254"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  statefull_gateway_ip:
+    type: string
+    default: "192.168.3.254"
+    constraints:
+      - allowed_pattern: "[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}"
+        description: Must be a valid IP address like 192.168.1.200
+
+  dns_nameservers:
+    type: comma_delimited_list
+    label: DNS nameservers
+    description: dns_nameservers=8.8.8.8,8.8.4.4
+
+  flavor:
+    type: string
+    label: The flavor for Instances
+    description: flavor=m1.medium
+    constraints:
+      - custom_constraint: nova.flavor
+
+  image:
+    type: string
+    label: The debian image based for Instances
+    description: image=debian-8-2016-01-01
+    constraints:
+      - custom_constraint: glance.image
+
+  router:
+    type: string
+    description: Router id where connect interface to subnet
+
+  etcd_initial_cluster:
+    type: string
+    description: "static0=http://192.168.1.10:2380,static1=http://192.168.1.11:2380,static2=http://192.168.1.12:2380"
+
+  size:
+    type: number
+    default: 3
+
+
+
+outputs:
+  scale_up:
+    value:
+      - {get_attr: [scale_up, alarm_url]}
+
+  scale_down:
+    value:
+      - {get_attr: [scale_down, alarm_url]}

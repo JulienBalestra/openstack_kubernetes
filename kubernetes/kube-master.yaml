@@ -1,0 +1,315 @@
+heat_template_version: 2014-10-16
+
+description: >
+  Fleet instance for Kubernetes
+
+resources:
+  random:
+    type: OS::Heat::RandomString
+    properties:
+      length: 10
+      sequence: lettersdigits
+
+  port:
+    depends_on: [ random ]
+    type: OS::Neutron::Port
+    properties:
+      name:
+        str_replace:
+          template: bn%-rand%
+          params:
+            "bn%": { get_param: instance_basename }
+            "rand%": { get_attr: [random, value] }
+      network_id: { get_param: network }
+      fixed_ips: [{ "subnet_id": { get_param: subnet } }]
+      security_groups: [ { get_param: security_group } ]
+
+  floating:
+    type: OS::Neutron::FloatingIP
+    depends_on: [ port ]
+    properties:
+      floating_network: { get_param: floatingip_network_name }
+      port_id: { get_resource: port }
+
+  instance:
+    depends_on: [ port ]
+    type: OS::Nova::Server
+    properties:
+      name:
+        str_replace:
+          template: bn%-rand%
+          params:
+            "bn%": { get_param: instance_basename }
+            "rand%": { get_attr: [random, value] }
+      user_data_format: RAW
+      user_data: { get_resource: userdata }
+      key_name: { get_param: key_name }
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      networks:
+        - port: { get_resource: port }
+      scheduler_hints:
+        group: { get_param: anti_affinity }
+
+      metadata:
+        etcd_initial_cluster: { get_param: etcd_initial_cluster }
+        fleet_state: { get_param: fleet_state }
+
+  userdata:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+        preserve_hostname: false
+        manage_etc_hosts: true
+        package_update: false
+
+        write_files:
+          - path: /opt/bin/setup-etcd-environment
+            permissions: 0755
+            content: |
+              #!/usr/bin/env bash
+
+              set -e ; set -o pipefail
+
+              DEFAULT_IPV4=$(curl 169.254.169.254/1.0/meta-data/local-ipv4)
+
+              cat << EOF | tee /etc/etcd-environment
+              ETCD_PROXY="on"
+              ETCD_INITIAL_CLUSTER="$(curl http://169.254.169.254/openstack/latest/meta_data.json |
+                jq -r -e .meta.etcd_initial_cluster)"
+              ETCD_ADVERTISE_CLIENT_URLS="http://${DEFAULT_IPV4}:2379"
+              ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:2379,http://0.0.0.0:4001"
+              ETCD_LISTEN_PEER_URLS="http://${DEFAULT_IPV4}:2380,http://${DEFAULT_IPV4}:7001"
+              EOF
+
+          - path: /opt/bin/setup-fleet-environment
+            permissions: 0755
+            content: |
+              #!/usr/bin/env bash
+
+              set -e ; set -o pipefail
+
+              cat << EOF | tee /etc/fleet-environment
+              FLEET_METADATA="state=$(curl http://169.254.169.254/openstack/latest/meta_data.json |
+                jq -r -e .meta.fleet_state),role=kube"
+              EOF
+
+              set +e
+
+              for i in {0..10}
+              do
+                sleep $i
+                etcdctl cluster-health && break
+              done
+
+          - path: /etc/systemd/system/kube-apiserver.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Kubernetes api server on port 8080
+
+              After=flanneld.service etcd.service fleet.service
+              Requires=flanneld.service etcd.service fleet.service
+
+              [Service]
+              EnvironmentFile=/etc/network-environment
+              EnvironmentFile=/run/flannel/subnet.env
+
+              ExecStart=/usr/bin/kube-apiserver \
+                --bind-address=0.0.0.0 \
+                --insecure-bind-address=0.0.0.0 \
+                --etcd-servers=http://127.0.0.1:2379 \
+                --allow-privileged=true \
+                --service-cluster-ip-range=${FLANNEL_SUBNET} \
+                --advertise-address=${DEFAULT_IPV4} \
+                --admission-control=NamespaceLifecycle,LimitRanger,ResourceQuota \
+                --enable-swagger-ui=true \
+                --apiserver-count=3 \
+                --v=2
+
+              Restart=always
+              RestartSec=10
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/kube-controller-manager.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Kubernetes controller manager
+
+              After=kube-apiserver.service
+              Requires=kube-apiserver.service
+
+              [Service]
+              EnvironmentFile=/etc/network-environment
+              EnvironmentFile=/run/flannel/subnet.env
+
+              ExecStart=/usr/bin/kube-controller-manager \
+                --master=http://${DEFAULT_IPV4}:8080 \
+                --leader-elect=true \
+                --service-cluster-ip-range=${FLANNEL_SUBNET} \
+                --v=2
+
+              Restart=always
+              RestartSec=10
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/kube-scheduler.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Kubernetes scheduler
+
+              After=kube-apiserver.service
+              Requires=kube-apiserver.service
+
+              [Service]
+              EnvironmentFile=/etc/network-environment
+
+              ExecStart=/usr/bin/kube-scheduler \
+                --master=http://${DEFAULT_IPV4}:8080 \
+                --leader-elect=true \
+                --v=2
+
+              Restart=always
+              RestartSec=10
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/traefik/traefik.toml
+            permissions: 0644
+            content: |
+              [web]
+              address = ":443"
+
+              [file]
+              [backends]
+                [backends.backend1]
+                  [backends.backend1.circuitbreaker]
+                    expression = "NetworkErrorRatio() > 0.5"
+                  [backends.backend1.servers.server1]
+                  url = "http://127.0.0.1:8080"
+                  weight = 1
+
+              [frontends]
+                [frontends.frontend1]
+                backend = "backend1"
+                [frontends.frontend1.routes.rule]
+                rule = "PathPrefix:/"
+
+          - path: /etc/systemd/system/traefik.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Traefik
+
+              Requires=fleet.service skydns.service flanneld.service
+              After=fleet.service skydns.service flanneld.service
+
+              [Service]
+              SyslogIdentifier=%p
+              EnvironmentFile=/etc/bucket_urls
+              Environment=TRAEFIK_CONF=/etc/traefik/
+              ExecStartPre=/usr/bin/curl -Ifk ${ACI_URL}/%p.aci
+              ExecStartPre=-/bin/rm -v /tmp/%p%i
+              ExecStartPre=/bin/mkdir -pv $TRAEFIK_CONF
+              ExecStartPre=/usr/bin/rkt --insecure-options=all fetch ${ACI_URL}/%p.aci
+              ExecStartPre=-/usr/bin/rkt gc --grace-period=0s %p
+              ExecStart=/usr/bin/rkt run \
+                --uuid-file-save=/tmp/%p%i \
+                --hostname=%p%i \
+                 --dns=127.0.0.1 \
+                 --net=host \
+                 --volume conf,kind=host,source=${TRAEFIK_CONF} \
+                %p \
+                --mount volume=conf,target=/etc/traefik
+
+              ExecStop=-/bin/rm -v /tmp/%p%i
+              Restart=always
+              RestartSec=30s
+              TimeoutStartSec=10min
+
+              [Install]
+              WantedBy=multi-user.target
+
+        runcmd:
+          - set -x
+
+          - cd /etc/systemd/system
+
+          - systemctl daemon-reload
+          - systemctl enable setup-etcd-environment.service
+          - systemctl enable setup-fleet-environment.service
+          - systemctl enable etcd.service
+          - systemctl enable flanneld.service
+          - systemctl enable fleet.socket
+          - systemctl enable fleet.service
+          - systemctl enable fleet-skydns.service
+          - systemctl enable jds_kafka.service
+
+          - systemctl start kube-apiserver.service
+          - systemctl start kube-scheduler.service
+          - systemctl start kube-controller-manager.service
+          - systemctl enable traefik.service
+
+          - systemctl start setup-etcd-environment.service
+          - systemctl start etcd.service
+          - systemctl start flanneld.service
+          - systemctl start setup-fleet-environment.service
+          - systemctl start fleet.service
+          - systemctl start fleet-skydns.service
+          - systemctl start fleet-jds_kafka.service
+
+          - systemctl start kube-apiserver.service
+          - systemctl start kube-scheduler.service
+          - systemctl start kube-controller-manager.service
+          - systemctl start traefik.service
+
+        final_message: "The system is finally up, after $UPTIME seconds"
+
+
+parameters:
+  key_name:
+    type: string
+    label: Name of keypair to assign to servers
+    description: key_name=foo
+    constraints:
+      - custom_constraint: nova.keypair
+
+  security_group:
+    type: string
+
+  network:
+    type: string
+
+  subnet:
+    type: string
+
+  image:
+    type: string
+
+  flavor:
+    type: string
+
+  anti_affinity:
+    type: string
+
+  instance_basename:
+    type: string
+
+  fleet_state:
+    type: string
+
+  etcd_initial_cluster:
+    type: string
+    description: "static0=http://192.168.1.10:2380,static1=http://192.168.1.11:2380,static2=http://192.168.1.12:2380"
+
+  floatingip_network_name:
+    type: string
+    label: The Floating IP network for NAT
+    description: floatingip_network_name=public

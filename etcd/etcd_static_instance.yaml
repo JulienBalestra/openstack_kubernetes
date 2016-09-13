@@ -1,0 +1,306 @@
+heat_template_version: 2014-10-16
+
+description: >
+  Etcd instance for static Etcd cluster
+
+resources:
+  port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: network }
+      fixed_ips:
+        - subnet_id: { get_param: subnet }
+          ip_address:
+            str_replace:
+              template: prefix%index%
+              params:
+                "prefix%": { get_param: prefix }
+                "index%":  { get_param: index }
+      security_groups: [ { get_param: security_group } ]
+
+  instance:
+    depends_on: [ port, userdata ]
+    type: OS::Nova::Server
+    properties:
+      key_name: { get_param: key_name }
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      networks:
+        - port: { get_resource: port }
+      user_data_format: RAW
+      user_data: { get_resource: userdata }
+      name:
+        str_replace:
+         template: __name__-__index__-__token__
+         params:
+           __name__: {get_param: name}
+           __index__: {get_param: index}
+           __token__: {get_param: etcd_initial_cluster_token}
+      scheduler_hints:
+        group: { get_param: anti_affinity }
+
+      metadata:
+        etcd_name:
+          str_replace:
+            template: static__index__
+            params:
+              __index__: { get_param: index }
+        etcd_initial_cluster_token: { get_param: etcd_initial_cluster_token }
+        etcd_initial_cluster: { get_param: etcd_initial_cluster }
+        etcd_initial_cluster_state: { get_param: etcd_initial_cluster_state }
+        etcd_initial_cluster_ip: { get_param: etcd_initial_cluster_ip }
+
+  userdata:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+        preserve_hostname: false
+        manage_etc_hosts: true
+
+        write_files:
+          - path: /opt/bin/setup-etcd-environment
+            permissions: 0755
+            content: |
+              #!/usr/bin/env bash
+
+              set -o pipefail ; set -e
+
+              ETCD_ENV_FILE=/etc/etcd-environment
+              ETCD_DATA_DIR=/var/lib/etcd
+              DEFAULT_IPV4=$(curl -sf 169.254.169.254/1.0/meta-data/local-ipv4)
+
+              ETCD_INITIAL_CLUSTER="$(curl -sf http://169.254.169.254/openstack/latest/meta_data.json |
+                jq -r -e .meta.etcd_initial_cluster)"
+
+              ETCD_INITIAL_CLUSTER_IP="$(curl -sf http://169.254.169.254/openstack/latest/meta_data.json |
+                jq -r -e .meta.etcd_initial_cluster_ip)"
+
+              ETCD_NAME=$(curl -sf http://169.254.169.254/openstack/latest/meta_data.json |
+                              jq -r -e .meta.etcd_name)
+
+              set +e
+
+              # Check if the data-dir is empty: First boot
+              if [ ! -d ${ETCD_DATA_DIR}/member ]
+              then
+
+                  # Check if there is an existing cluster
+                  etcdctl --endpoints $ETCD_INITIAL_CLUSTER_IP cluster-health
+                  if [ $? -eq 0 ]
+                  then
+                    echo "Existing cluster"
+                    ETCD_INITIAL_CLUSTER_STATE=existing
+
+                    # Check if this new member make a replacement
+                    REMOVE=$(etcdctl --endpoints $ETCD_INITIAL_CLUSTER_IP member list | \
+                      grep "$DEFAULT_IPV4" | awk 'sub(/:/,"") {print $1}' | sed 's/\[unstarted\]//' )
+
+                    if [ $REMOVE ]
+                    then
+                      echo "Remove ${REMOVE}"
+                      etcdctl --endpoints $ETCD_INITIAL_CLUSTER_IP member remove $REMOVE
+                    fi
+
+                    echo "Extend original cluster"
+
+                    ETCD_INITIAL_CLUSTER=$(etcdctl --endpoints $ETCD_INITIAL_CLUSTER_IP member add \
+                      $ETCD_NAME "http://${DEFAULT_IPV4}:2380" | grep "ETCD_INITIAL_CLUSTER=" | \
+                      sed 's/ETCD_INITIAL_CLUSTER=//')
+
+                    if [ -z $ETCD_INITIAL_CLUSTER ]
+                    then
+                      echo "Fail to extend original cluster: ETCD_INITIAL_CLUSTER=${ETCD_INITIAL_CLUSTER}"
+                    fi
+
+                  else
+                    ETCD_INITIAL_CLUSTER_STATE=new
+                  fi
+
+                else
+                  echo "Already some data in ${ETCD_DATA_DIR}"
+                  find ${ETCD_DATA_DIR}
+                  cat ${ETCD_ENV_FILE}
+                  exit $?
+              fi
+
+              set -e
+
+              cat << EOF | tee ${ETCD_ENV_FILE}
+              ETCD_INITIAL_CLUSTER_TOKEN="$(curl -s http://169.254.169.254/openstack/latest/meta_data.json |
+                jq -r -e .meta.etcd_initial_cluster_token)"
+              ETCD_INITIAL_CLUSTER=$ETCD_INITIAL_CLUSTER
+              ETCD_INITIAL_CLUSTER_STATE="$ETCD_INITIAL_CLUSTER_STATE"
+              ETCD_ADVERTISE_CLIENT_URLS="http://${DEFAULT_IPV4}:2379"
+              ETCD_INITIAL_ADVERTISE_PEER_URLS="http://${DEFAULT_IPV4}:2380"
+              ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:2379,http://0.0.0.0:4001"
+              ETCD_LISTEN_PEER_URLS="http://${DEFAULT_IPV4}:2380,http://${DEFAULT_IPV4}:7001"
+              ETCD_NAME=$ETCD_NAME
+              ETCD_DATA_DIR=$ETCD_DATA_DIR
+              EOF
+
+          - path: /opt/bin/etcd-gc.sh
+            permissions: 0755
+            content: |
+              #!/usr/bin/env bash
+
+              set -o pipefail
+
+              if [ -z ${LOSTS} ]
+              then
+                echo 'Missing ${LOSTS}'
+              fi
+
+              ACTUAL_LOSTS=$(etcdctl cluster-health  | \
+                grep "failed to check the health of member" | \
+                grep -Eo "[a-f0-9]{16}")
+
+              if [ ${ACTUAL_LOSTS} ] && [ -f ${LOSTS} ]
+              then
+
+                echo "Actual losts: ${ACTUAL_LOSTS}"
+                for member in ${ACTUAL_LOSTS}
+                do
+
+                  echo "Checking ${member}"
+                  IS_LOST=$(grep ${member} ${LOSTS})
+                  IP_LOST=$(etcdctl cluster-health | grep ${member} | \
+                    grep -Eo "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" | uniq)
+
+                  ping -W 10 -c 3 ${IP_LOST}
+                  RET=$?
+
+                  if [ ${RET} -ne 0 ] && [ ${IS_LOST} ]
+                  then
+                    echo "Member is lost: ${IS_LOST}"
+                    etcdctl member remove ${IS_LOST}
+
+                  elif [ ${RET} -eq 0 ] && [ ${IS_LOST} ]
+                  then
+                    echo "Member is lost: ${IS_LOST} but ping reply"
+                  else
+                    echo "Member is found: ${member}"
+                  fi
+
+                done
+
+                sleep 2
+
+                ACTUAL_LOSTS=$(etcdctl cluster-health  | \
+                  grep "failed to check the health of member" | \
+                  grep -Eo "[a-f0-9]{16}")
+                echo ${ACTUAL_LOSTS} > ${LOSTS}
+
+              else
+                echo ${ACTUAL_LOSTS} > ${LOSTS}
+              fi
+
+          - path: /etc/systemd/system/etcd-gc.service
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Purge orphan Etcd Members
+
+              Requires=etcd.service
+              After=etcd.service
+
+              [Service]
+              SyslogIdentifier=%p
+              Type=oneshot
+              Environment=LOSTS=/var/lib/etcd/losts
+              ExecStartPre=-/bin/cat $LOSTS
+              ExecStart=/opt/bin/etcd-gc.sh
+              ExecStartPost=-/bin/cat $LOSTS
+
+              [Install]
+              WantedBy=multi-user.target
+
+          - path: /etc/systemd/system/etcd-gc.timer
+            permissions: 0644
+            content: |
+              [Unit]
+              Description=Periodic gc missing Etcd members
+
+              [Timer]
+              OnActiveSec=0s
+              OnUnitActiveSec=1h
+
+              [Install]
+              WantedBy=multi-user.target
+
+
+          - path: /etc/systemd/system/fleet.service.d/10-metadata.conf
+            permissions: 0644
+            content: |
+              [Service]
+              Environment="FLEET_METADATA=role=services"
+
+        runcmd:
+          - set -x
+
+          - systemctl daemon-reload
+          - systemctl enable setup-etcd-environment.service
+          - systemctl enable etcd.service
+          - systemctl enable flanneld.service
+          - systemctl enable setup-fleet-environment.service
+          - systemctl enable fleet.socket
+          - systemctl enable fleet.service
+          - systemctl enable fleet-skydns.service
+          - systemctl enable etcd-gc.service
+          - systemctl enable etcd-gc.timer
+          - systemctl start setup-etcd-environment.service
+          - systemctl start etcd.service
+          - systemctl start flanneld.service
+          - systemctl start fleet.service
+          - systemctl start setup-fleet-environment.service
+          - systemctl start fleet-skydns.service
+          - systemctl start fleet-jds_kafka.service
+
+        final_message: "The system is finally up, after $UPTIME seconds"
+
+parameters:
+  key_name:
+    type: string
+    label: Name of keypair to assign to servers
+    description: key_name=foo
+    constraints:
+      - custom_constraint: nova.keypair
+
+  security_group:
+    type: string
+
+  network:
+    type: string
+
+  subnet:
+    type: string
+
+  image:
+    type: string
+
+  flavor:
+    type: string
+
+  prefix:
+    type: string
+
+  anti_affinity:
+    type: string
+
+  index:
+    type: number
+
+  etcd_initial_cluster_token:
+    type: string
+
+  etcd_initial_cluster:
+    type: string
+
+  etcd_initial_cluster_ip:
+    type: string
+
+  name:
+    type: string
+
+  etcd_initial_cluster_state:
+    type: string
+    default: "new"
