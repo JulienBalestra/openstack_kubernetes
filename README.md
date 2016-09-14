@@ -189,6 +189,7 @@ Of course, the Kibana is available over the FloatingIP of the stateless group.
 
 You can run the kubectl against the Kubemaster's FloatingIP as follow:
 
+
     kubectl -s kubeMaster0,kubeMaster1,kubeMaster2 get cs
     NAME                 STATUS    MESSAGE              ERROR
     controller-manager   Healthy   ok                   
