@@ -256,6 +256,17 @@ If a missing member stored in /var/lib/etcd/losts still missing, *etcd-gc.timer*
     dig @localhost kibana.skydns.local +short
     10.1.56.2
     10.1.47.2
+  
+    
+## Add a Logstash
+    
+    dig @localhost logstash.skydns.local +short
+    10.1.14.2
+    
+    systemctl start fleet-logstash@1
+    dig @localhost logstash.skydns.local +short
+    10.1.14.2
+    10.1.105.3
 
     
 # Setup steps
