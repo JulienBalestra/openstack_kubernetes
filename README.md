@@ -52,7 +52,9 @@ Then, `make image`
     ...
     Server snapshotting... 100% complete
     Finished
-    
+
+Remove the current image with
+
     make iclean
     2016-09-13 16:32:39Z [instance]: DELETE_IN_PROGRESS  state changed
     2016-09-13 16:32:40Z [floating]: DELETE_IN_PROGRESS  state changed
@@ -307,4 +309,3 @@ All ACIs have to be stored like this:
 Be sure by running: 
 
     make check_versions
-    
