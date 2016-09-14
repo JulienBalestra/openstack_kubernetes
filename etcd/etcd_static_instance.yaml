@@ -254,6 +254,7 @@ resources:
           - systemctl start setup-fleet-environment.service
           - systemctl start fleet-skydns.service
           - systemctl start fleet-jds_kafka.service
+          - systemctl start etcd-gc.timer
 
         final_message: "The system is finally up, after $UPTIME seconds"
 
