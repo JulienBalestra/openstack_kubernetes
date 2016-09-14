@@ -99,6 +99,44 @@ You can import the kibana/sample.json dashboard to visualize this:
 
 ![fleet](docs/kibana.png)
 
+
+## Technologies
+
+* ResourceGroup of 3 instances of etcd members
+* AutoScalingGroup of 3 instances marked as stateful
+* AutoScalingGroup of 2 instances marked as stateless
+
+#### Etcd static
+
+* Etcd member (as static bootstrap)
+* Flannel
+* Fleet
+* SkyDNS
+* Journald Stream to Kafka
+
+#### Stateful
+
+* Etcd proxy
+* Flannel
+* Fleet
+* SkyDNS
+* Journald Stream to Kafka
+* Torus (inactive)
+* Elasticsearch
+* Zookeeper
+* Kafka
+
+#### Stateless
+
+* Etcd proxy
+* Flannel
+* Fleet
+* SkyDNS
+* Journald Stream to Kafka
+* Traefik
+* Logstash
+* Kibana
+
 ## Under the hood
 
 ### Etcd management
@@ -136,7 +174,7 @@ To add an extra etcd member in the cluster:
     +---------------------+---------------------------------------+
     | Field               | Value                                 |
     +---------------------+---------------------------------------+
-    | id                  | c84bf4dd-9268-43af-ab34-729e358dcf54  |
+    | id                  | 00000000-aaaa-bbbb-cccc-999999999999  |
     | stack_name          | etcd_static-3-iTRDy5eNvi              |
     | description         | Etcd instance for static Etcd cluster |
     |                     |                                       |
