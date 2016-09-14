@@ -153,6 +153,7 @@ Based on the Fleet stack, this stack append:
 * AutoScalingGroup of 3 Kubemaster (api-server) 
 * AutoScalingGroup of 2 Kubenode (kubelet)
 
+
     make kubernetes
     
     2016-09-14 14:52:43Z [router]: CREATE_IN_PROGRESS  state changed
