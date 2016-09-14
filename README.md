@@ -227,7 +227,25 @@ Again, delete all extra **members**
     make fleet_delete_extra_members # memberS
 
 
-After 2 hours, the unreachable etcd members will be gc by *etcd-gc.timer*
+Periodic *etcd-gc.timer* will store any missing member in /var/lib/etcd/losts
+
+    Sep 14 15:05:56 static-2-j9cjctlpec etcd-gc[3097]: /bin/cat: /var/lib/etcd/losts: No such file or directory
+    Sep 14 15:06:02 static-2-j9cjctlpec etcd-gc[3120]: bc887d297aeffc9d
+    Sep 14 15:06:02 static-2-j9cjctlpec systemd[1]: Started Purge orphan Etcd Members.
+    
+If a missing member stored in /var/lib/etcd/losts still missing, *etcd-gc.timer* remove it
+    
+    Sep 14 16:05:57 static-2-j9cjctlpec systemd[1]: Starting Purge orphan Etcd Members...
+    Sep 14 16:05:57 static-2-j9cjctlpec etcd-gc[3272]: bc887d297aeffc9d
+    Sep 14 16:06:03 static-2-j9cjctlpec etcd-gc[3275]: Actual losts: bc887d297aeffc9d
+    Sep 14 16:06:03 static-2-j9cjctlpec etcd-gc[3275]: Checking bc887d297aeffc9d
+    Sep 14 16:06:21 static-2-j9cjctlpec etcd-gc[3275]: PING 192.168.1.13 (192.168.1.13) 56(84) bytes of data.
+    Sep 14 16:06:21 static-2-j9cjctlpec etcd-gc[3275]: --- 192.168.1.13 ping statistics ---
+    Sep 14 16:06:21 static-2-j9cjctlpec etcd-gc[3275]: 3 packets transmitted, 0 received, 100% packet loss, time 2015ms
+    Sep 14 16:06:21 static-2-j9cjctlpec etcd-gc[3275]: Member is lost: bc887d297aeffc9d
+    Sep 14 16:06:22 static-2-j9cjctlpec etcd-gc[3275]: Removed member bc887d297aeffc9d from cluster
+    Sep 14 16:06:26 static-2-j9cjctlpec systemd[1]: Started Purge orphan Etcd Members.
+
     
 ## Add a Kibana
     
