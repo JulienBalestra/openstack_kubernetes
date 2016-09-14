@@ -58,7 +58,7 @@ check:
 	@test '$(PHONE_HOME)'
 	@echo {} | jq . > /dev/null
 
-check_versions:
+check_versions: check
 	test '$(ETCD_VERSION)'
 	test '$(FLEET_VERSION)'
 	test '$(CONFD_VERSION)'
@@ -96,7 +96,7 @@ check_versions:
 	curl -Ifk $(BUCKET)/aci/zookeeper.aci
 
 
-$(INSTANCE): check check_versions
+$(INSTANCE): check_versions
 	@openstack --insecure stack output show instance instance_id -f json -c output_value || \
 	openstack $(FLAGS) stack create $(INSTANCE) \
 	-t image/generate_image.yaml \
