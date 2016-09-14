@@ -2,9 +2,13 @@
 
 
 set -o pipefail
-set -e
+set -ex
 
-BASE=fleet
+test $1
+
+set +x
+
+BASE=$1
 PARENT=etcd_static
 CHILD_STACK="etcd_static_instance.yaml"
 

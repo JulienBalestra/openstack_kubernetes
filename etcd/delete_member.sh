@@ -3,7 +3,13 @@
 
 set -o pipefail
 
-BASE=fleet
+set -ex
+
+test $1
+
+set +x
+
+BASE=$1
 PARENT=etcd_static
 
 ETCD_STATIC=$(openstack --insecure stack resource show ${BASE} ${PARENT} -f json | jq -r .[3].Value)
@@ -11,7 +17,7 @@ RG_ANTI=$(openstack --insecure stack output show ${ETCD_STATIC} anti_affinity -f
 TOKEN=$(openstack --insecure stack output show ${ETCD_STATIC} etcd_initial_cluster_token -f json | jq -r .[2].Value)
 RG_NB=$(openstack --insecure server group show ${RG_ANTI} -f json | jq -r .[1].Value | wc -w)
 
-if [ "opt-$1" == "opt-all" ] && [ ${RG_NB} -gt 3 ]
+if [ "opt-$2" == "opt-all" ] && [ ${RG_NB} -gt 3 ]
 then
     while [ ${RG_NB} -gt 3 ]
     do

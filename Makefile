@@ -21,6 +21,8 @@ GO_SRCS = phone/phone.go
 
 default: all
 
+.PHONY: all $(IMG) $(INSTANCE) check check_versions fclean clean $(PHONE) $(FLEET) $(KUBERNETES) is_instance_finished_well is_instance_off
+
 $(PHONE): $(GO_SRCS)
 	GOPATH=$(GOPATH) $(CC) build -o $(PHONE) phone/phone.go
 
@@ -142,7 +144,7 @@ $(IMG): is_instance_off
 
 $(KUBERNETES): check
 	@openstack $(FLAGS) stack create $(KUBERNETES) \
-	-t $(KUBERNETES).yaml \
+	-t kubernetes/$(KUBERNETES).yaml \
 	-e registry.yaml \
 	--parameter key_name=$(KEY_NAME) \
 	--parameter flavor_static='m1.medium' \
@@ -166,16 +168,25 @@ $(FLEET): check
 	--parameter floatingip_network_name='ext-net' \
 	--wait
 
-fleet_add_extra_member: check
-	@./etcd/add_member.sh
+$(FLEET)_add_extra_member: check
+	@./etcd/add_member.sh $(FLEET)
 
-fleet_delete_extra_member: check
-	@./etcd/delete_member.sh
+$(FLEET)_delete_extra_member: check
+	@./etcd/delete_member.sh $(FLEET)
 
-fleet_delete_extra_members: check
-	@./etcd/delete_member.sh all
-
-fleet_delete: fleet_delete_extra_members
+$(FLEET)_delete: $(FLEET)_delete_extra_member
 	openstack $(FLAGS) stack delete --yes $(FLEET) --wait
 
-.PHONY: all instance $(IMG) $(INSTANCE) check fclean clean $(PHONE) $(FLEET) $(KUBERNETES) is_instance_finished_well is_instance_off
+$(KUBERNETES)_delete_extra_members: check
+	@./etcd/delete_member.sh $(KUBERNETES) all
+
+$(KUBERNETES)_add_extra_member: check
+	@./etcd/add_member.sh $(KUBERNETES)
+
+$(KUBERNETES)_delete_extra_members: check
+	@./etcd/delete_member.sh $(KUBERNETES) all
+
+$(KUBERNETES)_delete: $(KUBERNETES)_delete_extra_members
+	openstack $(FLAGS) stack delete --yes $(KUBERNETES) --wait
+
+

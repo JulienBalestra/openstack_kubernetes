@@ -2,9 +2,14 @@
 
 Note: Some improvement to do with the Liberty for etcd add / remove members field.
 
-# Stages
+The image used is a Ubuntu 16.04 server.
+The fleet stack also works with Debian Jessie.
 
-#### Image
+# Fleet Only
+
+## Stages
+
+### Image
 
 First, *easily* generate an image with `make instance`, this will produced this output:
 
@@ -63,7 +68,7 @@ Remove the current image with
     2016-09-13 16:32:49Z [port]: DELETE_IN_PROGRESS  state changed
     2016-09-13 16:32:49Z [generate_userdata]: DELETE_IN_PROGRESS  state changed
 
-    
+### Fleet    
     
 Once the fleet image is done, you're ready to launch a fleet cluster.
 
@@ -102,7 +107,7 @@ You can import the kibana/sample.json dashboard to visualize this:
 ![fleet](docs/kibana.png)
 
 
-## Technologies
+### Technologies
 
 * ResourceGroup of 3 instances of etcd members
 * AutoScalingGroup of 3 instances marked as stateful
@@ -138,6 +143,62 @@ You can import the kibana/sample.json dashboard to visualize this:
 * Traefik
 * Logstash
 * Kibana
+
+# Fleet for Kubernetes - Rktnetes
+
+NOTE: Under development and lot of issues to fix, like systemd-udev
+
+Based on the Fleet stack, this stack append:
+
+* AutoScalingGroup of 3 Kubemaster (api-server) 
+* AutoScalingGroup of 2 Kubenode (kubelet)
+
+    make kubernetes
+    
+    2016-09-14 14:52:43Z [router]: CREATE_IN_PROGRESS  state changed
+    2016-09-14 14:52:45Z [router]: CREATE_COMPLETE  state changed
+    2016-09-14 14:52:45Z [etcd_static]: CREATE_IN_PROGRESS  state changed
+    2016-09-14 14:54:47Z [etcd_static]: CREATE_COMPLETE  state changed
+    2016-09-14 14:54:47Z [worker_statefull]: CREATE_IN_PROGRESS  state changed
+    2016-09-14 14:56:44Z [worker_statefull]: CREATE_COMPLETE  state changed
+    2016-09-14 14:56:44Z [worker_stateless]: CREATE_IN_PROGRESS  state changed
+    2016-09-14 14:58:40Z [worker_stateless]: CREATE_COMPLETE  state changed
+    2016-09-14 14:58:40Z [kubemaster]: CREATE_IN_PROGRESS  state changed
+    2016-09-14 15:00:45Z [kubemaster]: CREATE_COMPLETE  state changed
+    2016-09-14 15:00:45Z [kubenode]: CREATE_IN_PROGRESS  state changed
+    2016-09-14 15:02:47Z [kubenode]: CREATE_COMPLETE  state changed
+    +---------------------+-------------------------------------------------------------------------------------------------------------------------+
+    | Field               | Value                                                                                                                   |
+    +---------------------+-------------------------------------------------------------------------------------------------------------------------+
+    | id                  | 00000000-aaaa-bbbb-cccc-999999999999                                                                                    |
+    | stack_name          | kubernetes                                                                                                              |
+    | description         | Fleet cluster over etcd static cluster, with Flannel, Kafka + ELK access over Traefik RP to deploy a Kubernetes cluster |
+    |                     |                                                                                                                         |
+    | creation_time       | 2016-09-14T14:52:43Z                                                                                                    |
+    | updated_time        | None                                                                                                                    |
+    | stack_status        | CREATE_COMPLETE                                                                                                         |
+    | stack_status_reason | Stack CREATE completed successfully                                                                                     |
+    +---------------------+-------------------------------------------------------------------------------------------------------------------------+
+
+Now, the following infrastructure is ready:
+
+![kubernetes](docs/kubernetes.png)
+
+Of course, the Kibana is available over the FloatingIP of the stateless group.
+
+You can run the kubectl against the Kubemaster's FloatingIP as follow:
+
+    kubectl -s kubeMaster0,kubeMaster1,kubeMaster2 get cs
+    NAME                 STATUS    MESSAGE              ERROR
+    controller-manager   Healthy   ok                   
+    scheduler            Healthy   ok                   
+    etcd-0               Healthy   {"health": "true"}  
+    
+    kubectl -s kubeMaster0,kubeMaster1,kubeMaster2 get no
+    NAME                   STATUS    AGE
+    kube-node-achruumzsn   Ready     1m
+    kube-node-yvkndqjpbm   Ready     1m
+
 
 ## Under the hood
 
@@ -267,6 +328,11 @@ If a missing member stored in /var/lib/etcd/losts still missing, *etcd-gc.timer*
     dig @localhost logstash.skydns.local +short
     10.1.14.2
     10.1.105.3
+
+
+## Fleet for rktnetes
+
+
 
     
 # Setup steps
