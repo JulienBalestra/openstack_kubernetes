@@ -202,6 +202,8 @@ You can run the kubectl against the Kubemaster's FloatingIP as follow:
     kube-node-achruumzsn   Ready     1m
     kube-node-yvkndqjpbm   Ready     1m
 
+The Kubernetes cluster point to http://127.0.0.1:2379 for service discovery, who's a proxy to the static etcd cluster, see Under the Hood for more details about etcd.
+ 
 
 ## Under the hood
 
@@ -213,7 +215,7 @@ You can run the kubectl against the Kubemaster's FloatingIP as follow:
     member 9e2fef28ec9ef1b0 is healthy: got healthy result from http://192.168.1.11:2379
     cluster is healthy
 
-To add an extra etcd member in the cluster:
+To add an extra etcd member in the cluster (fleet, kubernetes):
 
     make fleet_add_extra_member
     # Will produce the following stdout:
@@ -331,11 +333,6 @@ If a missing member stored in /var/lib/etcd/losts still missing, *etcd-gc.timer*
     dig @localhost logstash.skydns.local +short
     10.1.14.2
     10.1.105.3
-
-
-## Fleet for rktnetes
-
-
 
     
 # Setup steps

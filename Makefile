@@ -174,14 +174,17 @@ $(FLEET)_add_extra_member: check
 $(FLEET)_delete_extra_member: check
 	@./etcd/delete_member.sh $(FLEET)
 
-$(FLEET)_delete: $(FLEET)_delete_extra_member
-	openstack $(FLAGS) stack delete --yes $(FLEET) --wait
+$(FLEET)_delete_extra_members: check
+	@./etcd/delete_member.sh $(FLEET) all
 
-$(KUBERNETES)_delete_extra_members: check
-	@./etcd/delete_member.sh $(KUBERNETES) all
+$(FLEET)_delete: $(FLEET)_delete_extra_members
+	openstack $(FLAGS) stack delete --yes $(FLEET) --wait
 
 $(KUBERNETES)_add_extra_member: check
 	@./etcd/add_member.sh $(KUBERNETES)
+
+$(KUBERNETES)_delete_extra_member: check
+	@./etcd/delete_member.sh $(KUBERNETES)
 
 $(KUBERNETES)_delete_extra_members: check
 	@./etcd/delete_member.sh $(KUBERNETES) all
