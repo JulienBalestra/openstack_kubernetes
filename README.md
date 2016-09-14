@@ -153,6 +153,7 @@ Based on the Fleet stack, this stack append:
 * AutoScalingGroup of 3 Kubemaster (api-server) 
 * AutoScalingGroup of 2 Kubenode (kubelet)
 
+Using the Makefile:
 
     make kubernetes
     
