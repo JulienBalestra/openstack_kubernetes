@@ -266,7 +266,7 @@ And delete the latest extra member
     2016-09-13 17:07:18Z [instance]: DELETE_COMPLETE  state changed
     2016-09-13 17:07:18Z [port]: DELETE_IN_PROGRESS  state changed
     
-     etcdctl cluster-health
+    etcdctl cluster-health
     member 1eeb69136ece2e20 is healthy: got healthy result from http://192.168.1.10:2379
     failed to check the health of member 2b271486cef2a7b4 on http://192.168.1.13:2379: Get http://192.168.1.13:2379/health: dial tcp 192.168.1.13:2379: getsockopt: no route to host
     member 2b271486cef2a7b4 is unreachable: [http://192.168.1.13:2379] are all unreachable
