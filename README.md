@@ -182,13 +182,29 @@ Using the Makefile:
     | stack_status_reason | Stack CREATE completed successfully                                                                                     |
     +---------------------+-------------------------------------------------------------------------------------------------------------------------+
 
+### Deployed
+
 Now, the following infrastructure is ready:
 
 ![kubernetes](docs/kubernetes.png)
 
+With a quick overview of the machine deployment:
+
+![kubernetes](docs/machines.png)
+
+With, as example, the following network distribution:
+
+![kubernetes](docs/interfaces.png)
+
+Checking the network connectivity and latency (express in milliseconds) between each host accross differents networks (Regular, Flannel)
+
+![kubernetes](docs/connections.png)
+
 Of course, the Kibana is available over the FloatingIP of the stateless group.
 
-You can run the kubectl against the Kubemaster's FloatingIP as follow:
+### Using Kubernetes
+
+Finally, you can run the kubectl against the Kubemaster's FloatingIP as follow:
 
 
     kubectl -s kubeMaster0,kubeMaster1,kubeMaster2 get cs
