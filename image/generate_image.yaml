@@ -792,34 +792,32 @@ resources:
           - mv -v torusd /usr/bin/torusd
           - mkdir -pv /var/lib/torus
 
-          - mkdir -v /opt/cni
-          - [curl, -L, {get_param: insecure}, {get_param: cni_tar}, -o, /opt/cni/cni.tar.gz]
-          - cd -P /opt/cni
-          - tar -xzvf /opt/cni/cni.tar.gz --strip-components=1
-          - ln -s /opt/cni/cnitool /usr/bin/cnitool
-          - mv -v /opt/cni/cni.tar.gz /tmp
+          - mkdir -pv /opt/bin/cni
+          - [curl, -L, {get_param: insecure}, {get_param: cni_tar}, -o, /opt/bin/cni/cni.tar.gz]
+          - cd -P /opt/bin/cni/
+          - tar -xzvf /opt/bin/cni/cni.tar.gz --strip-components=1
+          - ln -s /opt/bin/cni/cnitool /usr/bin/cnitool
+          - mv -v /opt/bin/cni/cni.tar.gz /tmp
 
           - mkdir -v /tmp/calico_install
           - mkdir -pv /usr/lib/rkt/plugins/net
           - cd -P /tmp/calico_install
           - [curl, -L, {get_param: insecure}, {get_param: calico_tar}, -o, /tmp/calico_install/calico.tar.gz]
           - tar -xzvf calico.tar.gz
-          - mv -v /tmp/calico_install/calico /opt/cni/calico
-          - mv -v /tmp/calico_install/calico-ipam /opt/cni/calico-ipam
+          - mv -v /tmp/calico_install/calico /opt/bin/cni/calico
+          - mv -v /tmp/calico_install/calico-ipam /opt/bin/cni/calico-ipam
           - mv -v /tmp/calico_install/calicoctl /usr/bin/calicoctl
-          - ln -s /opt/cni/calico /etc/rkt/net.d/calico
-          - ln -s /opt/cni/calico /usr/lib/rkt/plugins/net/calico
-          - ln -s /opt/cni/calico-ipam /usr/lib/rkt/plugins/net/calico-ipam
-          - ln -s /opt/cni/calico-ipam /etc/rkt/net.d/calico-ipam
-          - chmod -R +x /opt/cni
+          - ln -s /opt/bin/cni/calico /etc/rkt/net.d/calico
+          - ln -s /opt/bin/cni/calico /usr/lib/rkt/plugins/net/calico
+          - ln -s /opt/bin/cni/calico-ipam /usr/lib/rkt/plugins/net/calico-ipam
+          - ln -s /opt/bin/cni/calico-ipam /etc/rkt/net.d/calico-ipam
+          - chmod -R +x /opt/bin/cni
           - chmod +x /usr/bin/calicoctl
 
           - mkdir -p /tmp/kubernetes_install
           - cd -P /tmp/kubernetes_install
           - [curl, -L, {get_param: insecure}, {get_param: kubernetes_tar}, -o, /tmp/kubernetes_install/kubernetes.tar.gz]
           - tar -xzvf /tmp/kubernetes_install/kubernetes.tar.gz --strip-components=1
-          - mv /tmp/kubernetes_install/server/bin/federation-apiserver /usr/bin/federation-apiserver
-          - mv /tmp/kubernetes_install/server/bin/federation-controller-manager /usr/bin/federation-controller-manager
           - mv /tmp/kubernetes_install/server/bin/hyperkube /usr/bin/hyperkube
           - mv /tmp/kubernetes_install/server/bin/kube-apiserver /usr/bin/kube-apiserver
           - mv /tmp/kubernetes_install/server/bin/kube-controller-manager /usr/bin/kube-controller-manager

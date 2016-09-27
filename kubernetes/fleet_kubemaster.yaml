@@ -219,9 +219,7 @@ parameters:
 
 outputs:
   scale_up:
-    value:
-      - {get_attr: [scale_up, alarm_url]}
+    value: {get_attr: [scale_up, alarm_url]}
 
   scale_down:
-    value:
-      - {get_attr: [scale_down, alarm_url]}
+    value: {get_attr: [scale_down, alarm_url]}

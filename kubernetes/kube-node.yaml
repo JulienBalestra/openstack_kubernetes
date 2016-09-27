@@ -163,7 +163,7 @@ resources:
               [Service]
               EnvironmentFile=/etc/network-environment
               EnvironmentFile=/run/flannel/subnet.env
-              Environment=CNI_DIR=/opt/cni
+              Environment=CNI_DIR=/opt/bin/cni/
 
               EnvironmentFile=/etc/kubemaster
 
