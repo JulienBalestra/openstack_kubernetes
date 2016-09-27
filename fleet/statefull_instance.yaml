@@ -328,7 +328,9 @@ resources:
                 --uuid-file-save=/tmp/%p%i \
                 --hostname=%p%i \
                 --volume volume-usr-share-elasticsearch-data,kind=host,source=${ES_DATA} \
-                %p
+                %p \
+                --seccomp mode=retain,errno=ENOSYS,@rkt/default-whitelist
+                # rkt ES #3121
               ExecStop=-/bin/rm -v /tmp/%p%i
               Restart=always
               RestartSec=30s
