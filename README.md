@@ -146,8 +146,6 @@ You can import the kibana/sample.json dashboard to visualize this:
 
 # Fleet for Kubernetes - Rktnetes
 
-NOTE: Under development and lot of issues to fix, like systemd-udev
-
 Based on the Fleet stack, this stack append:
 
 * AutoScalingGroup of 3 Kubemaster (api-server) 
